@@ -1,0 +1,781 @@
+---
+title: "Exploratory analysis of KOMP association summary statistics"
+author: "Hao He"
+date: "`r Sys.Date()`"
+site: workflowr::wflow_site
+output:
+  workflowr::wflow_html:
+    toc: true
+editor_options:
+  chunk_output_type: console
+---
+
+```{r knitr-opts, include=FALSE}
+knitr::opts_chunk$set(comment = "#",collapse = TRUE)
+```
+
+
+```{r load_packages, include=FALSE}
+rm(list=ls())
+library(plyr)
+library(scales)
+library(ggplot2)
+library(plotly)
+library(reshape2)
+library(gridExtra)
+library(data.table) #fread
+library(kableExtra)
+library(pheatmap)
+library(viridis) ## for color scales
+library(scales)
+#library(Rtsne)
+library(cowplot)
+library(RColorBrewer)
+library(tidyverse)
+library(ComplexHeatmap)
+library(circlize)
+batch = "2022-05-13" #to change for different version of data
+
+AT.summary.stat.path <- paste0("output/", batch, "_AT/")
+
+#heatmap location
+path0 = paste0(AT.summary.stat.path, "heatmap_each_mutant")
+if (!dir.exists(path0))
+{ dir.create(path0) } #create folder
+
+path1 = paste0(path0, "/stdbeta_p/")
+if (!dir.exists(path1))
+{ dir.create(path1) } #create folder
+
+path2 = paste0(path0, "/stdbeta_fdr/")
+if (!dir.exists(path2))
+{ dir.create(path2) } #create folder
+
+#source("code/compare_before_after_outlier_removal.R")
+#source("code/boxplot_for_outlier.R")
+#source("code/name_path.R")
+```
+
+## Combine all association test stat data.
+```{r Combine all association test stat dat}
+meta.data.file <- paste0("data/KOMP2018_Meta_Table_v1.2.csv")
+meta.data <- read.csv(meta.data.file, header=TRUE)
+meta.data <- meta.data[meta.data$Domain != "EKG",]
+
+pheno.domain.list <- unique(meta.data$Domain)
+
+all.AT.summary.stat <- NULL
+for(pd in pheno.domain.list){
+  AT.summary.stat.file <- paste0(AT.summary.stat.path, pd, "_stats_LASSO_", batch, "_wing1months.csv")
+  AT.summary.stat <- as.data.frame(fread(AT.summary.stat.file, header=TRUE, sep=","))
+  all.AT.summary.stat <- rbind(all.AT.summary.stat, AT.summary.stat)
+}
+
+dim(all.AT.summary.stat)
+pheno.list <- as.character(meta.data$Phenotype)
+all.AT.summary.stat <- subset(all.AT.summary.stat, pheno %in% pheno.list)
+
+all.AT.summary.stat$geno.fdr <- p.adjust(all.AT.summary.stat$geno.pval, method="BH", n=length(na.omit(all.AT.summary.stat$geno.pval)))
+
+## add short domain and phenotype names
+dim(all.AT.summary.stat)
+all.AT.summary.stat <- merge(droplevels(all.AT.summary.stat), droplevels(meta.data), by.x=c("domain","pheno"), by.y=c("Domain","Phenotype"), all.x=TRUE)
+dim(all.AT.summary.stat)
+
+# add short gene name
+all.AT.summary.stat$mutant.short <- str_replace(all.AT.summary.stat$mutant, "n-TAagc16", "n_TAagc16")
+all.AT.summary.stat$mutant.short[all.AT.summary.stat$mutant.short == "C57BL/6J-Tg(tetO-NEK1)5Lutzy/J"] = "Tg_tetO_NEK1"
+all.AT.summary.stat$mutant.short <- gsub(".*-\\s*|<.*", "",all.AT.summary.stat$mutant.short)
+
+write.csv(all.AT.summary.stat, file = paste0(AT.summary.stat.path, "All.AT.summary.stat.csv"), row.names = FALSE)
+```
+
+## heatmap for each mutant
+```{r heatmap for each mutant, eval=FALSE}
+#heatmap for lasso results for each mutant line generate a heatmap
+for (mu in unique(all.AT.summary.stat$mutant)){
+  #mu <- mutant.list[[6]]
+  mat.sub <- subset(all.AT.summary.stat, mutant == mu)
+  mat.sub <- mat.sub[order(mat.sub$Category,mat.sub$domain),]
+  rownames(mat.sub) <- mat.sub$Figure_Label
+  
+  ##annotation domain and color in the heatmap
+  df <- data.frame(Type = mat.sub$Category,
+                   Domain = mat.sub$domain)
+  
+  f = mat.sub$Category_Color
+  names(f) = mat.sub$Category
+  
+  v = mat.sub$Domain_Color
+  names(v) = mat.sub$domain
+  
+  ha2 = rowAnnotation(df = df,
+                      col = list(Type = f,
+                                 Domain = v),show_annotation_name = T)
+  
+  # use std.beta #
+  mat.sub1 <- as.matrix(mat.sub[,"geno.std.beta"])
+  rownames(mat.sub1) <- mat.sub$Figure_Label
+  colnames(mat.sub1) <- "Std beta"
+
+  ht1 = Heatmap(mat.sub1, name = "Std beta",col = colorRamp2(c(-1, 0, 1), c("green", "white","blue")),
+                cluster_rows = F, cluster_columns = F, width = unit(1, "cm"), 
+                show_row_names=T,row_names_side = "left", row_names_gp = gpar(fontsize = 6),show_column_names = T,use_raster=F,na_col = "white",column_names_max_height = unit(8, "cm"))
+
+  ht2 = Heatmap(mat.sub[,"geno.pval"], name = "P-value", col = colorRamp2(c(0, 0.05), c("red","white")),
+                cluster_rows = F, cluster_columns = F, width = unit(1, "cm"), column_title = mu,
+                show_row_names=F, show_column_names = T, use_raster=F,na_col = "white", column_names_max_height = unit(8, "cm"))
+
+  ht_list = ht1 + ht2 + ha2
+  pdf(file=paste0(path1,
+                  gsub("[[:punct:]]", " ", unique(mat.sub$mutant.short)), 
+                  "_lasso_stdbeta_p.pdf"),height = 12,width = 6)
+  print(ht_list)
+  dev.off()
+}
+
+#heatmap for lasso results for each mutant line generate a heatmap
+for (mu in unique(all.AT.summary.stat$mutant)){
+  #mu <- mutant.list[[6]]
+  mat.sub <- subset(all.AT.summary.stat, mutant == mu)
+  mat.sub <- mat.sub[order(mat.sub$Category,mat.sub$domain),]
+  rownames(mat.sub) <- mat.sub$Figure_Label
+  
+  ##annotation domain and color in the heatmap
+  df <- data.frame(Type = mat.sub$Category,
+                   Domain = mat.sub$domain)
+  
+  f = mat.sub$Category_Color
+  names(f) = mat.sub$Category
+  
+  v = mat.sub$Domain_Color
+  names(v) = mat.sub$domain
+  
+  ha2 = rowAnnotation(df = df,
+                      col = list(Type = f,
+                                 Domain = v),show_annotation_name = T)
+  
+  # use std.beta #
+  mat.sub1 <- as.matrix(mat.sub[,"geno.std.beta"])
+  rownames(mat.sub1) <- mat.sub$Figure_Label
+  colnames(mat.sub1) <- "Std beta"
+  
+  ht1 = Heatmap(mat.sub1, name = "Std beta",col = colorRamp2(c(-1, 0, 1), c("green", "white","blue")),
+                cluster_rows = F, cluster_columns = F, width = unit(1, "cm"), 
+                show_row_names=T,row_names_side = "left", row_names_gp = gpar(fontsize = 6),show_column_names = T,use_raster=F,na_col = "white",column_names_max_height = unit(8, "cm"))
+  
+  ht2 = Heatmap(mat.sub[,"geno.fdr"], name = "FDR", col = colorRamp2(c(0, 0.05), c("red","white")),
+                cluster_rows = F, cluster_columns = F, width = unit(1, "cm"), column_title = mu,
+                show_row_names=F, show_column_names = T, use_raster=F,na_col = "white", column_names_max_height = unit(8, "cm"))
+  
+  ht_list = ht1 + ht2 + ha2
+  pdf(file=paste0(path2,
+                  gsub("[[:punct:]]", " ", unique(mat.sub$mutant.short)), 
+                  "_lasso_stdbeta_fdr.pdf"),height = 12,width = 6)
+  print(ht_list)
+  dev.off()
+}
+```
+
+## Exploratory figures
+```{r EDA_figures, message=FALSE, eval=TRUE,  fig.height=6, fig.width=8}
+par(mfrow=c(2,3))
+hist(all.AT.summary.stat$num.case)
+abline(v = mean(all.AT.summary.stat$num.case), col = "blue", lwd = 2)
+abline(v = median(all.AT.summary.stat$num.case), col = "red", lwd = 2)
+summary(all.AT.summary.stat$num.case)
+
+hist(all.AT.summary.stat$num.control)
+abline(v = mean(all.AT.summary.stat$num.control), col = "blue", lwd = 2)
+abline(v = median(all.AT.summary.stat$num.control), col = "red", lwd = 2)
+summary(all.AT.summary.stat$num.control)
+
+hist(all.AT.summary.stat$geno.pval)
+plot(all.AT.summary.stat$num.case, all.AT.summary.stat$num.control)
+plot(all.AT.summary.stat$num.male.case, all.AT.summary.stat$num.female.case)
+plot(all.AT.summary.stat$num.male.control, all.AT.summary.stat$num.female.control)
+
+```
+
+## Proportion of significant tests (FDR < 0.05) in each domain 
+```{r domain_sig_count}
+domain.summary<-ddply(all.AT.summary.stat, c("domain"), summarise, Num.Sig=sum(na.omit(geno.fdr)<0.05), 
+                      Num.Test=length(na.omit(geno.fdr)), 
+                      Pct.Sig=round(100*sum(na.omit(geno.fdr)<0.05)/length(na.omit(geno.fdr)), 2))
+domain.summary <- domain.summary[order(-domain.summary$Pct.Sig),]
+kable(domain.summary) %>%
+  kable_styling(bootstrap_options = c("striped","condensed","responsive"), full_width = F, font_size = 12) %>%
+  scroll_box(height = "500px")
+```
+
+## Proportion of significant tests (FDR < 0.05) in each phenotype
+```{r pheno_sig_count}
+pheno.summary<-ddply(all.AT.summary.stat, c("domain","pheno"), summarise, Num.Sig=sum(na.omit(geno.fdr)<0.05), 
+                      Num.Test=length(na.omit(geno.fdr)), 
+                      Pct.Sig=round(100*sum(na.omit(geno.fdr)<0.05)/length(na.omit(geno.fdr)), 2))
+pheno.summary <- pheno.summary[order(-pheno.summary$Pct.Sig),]
+kable(pheno.summary) %>%
+  kable_styling(bootstrap_options = c("striped","condensed","responsive"), full_width = F, font_size = 12) %>%
+  scroll_box(height = "500px")
+```
+
+## Proportion of significant tests (FDR < 0.05) in each mutantline
+```{r mutant_sig_count}
+mutant.summary<-ddply(all.AT.summary.stat, c("mutant","mutant.short"), summarise, Num.Sig=sum(na.omit(geno.fdr)<0.05), 
+                      Num.Test=length(na.omit(geno.fdr)), 
+                      Pct.Sig=round(100*sum(na.omit(geno.fdr)<0.05)/length(na.omit(geno.fdr)), 2))
+#mutant.summary <- mutant.summary[order(-mutant.summary$Pct.Sig),]
+mutant.summary <- mutant.summary[order(-mutant.summary$Num.Sig),]
+kable(mutant.summary) %>%
+  kable_styling(bootstrap_options = c("striped","condensed","responsive"), full_width = F, font_size = 12) %>%
+  scroll_box(height = "500px")
+```
+
+## [Gene Pleiotropy] Stacked Histogram (By Domain and By Category) 
+```{r mutant_sig_count_histo, fig.height=6, fig.width=10}
+mutant.summary <- mutant.summary[order(-mutant.summary$Num.Sig),]
+all.AT.summary.stat$mutant <- factor(all.AT.summary.stat$mutant, levels=mutant.summary$mutant)
+
+#all.AT.summary.stat$geno.sig <- all.AT.summary.stat$geno.fdr < 0.05
+sig.AT.stat <- subset(all.AT.summary.stat, geno.fdr < 0.05)
+sig.AT.stat <- droplevels(subset(sig.AT.stat, mutant%in%mutant.summary$mutant[1:50]))
+
+axis.title.size <- 12
+axis.text.size <- 6
+
+g1 <- ggplot(sig.AT.stat, aes(mutant))
+g1 <- g1 + geom_bar(aes(fill=Domain_Short))
+g1 <- g1 + scale_fill_manual(values=c(brewer.pal(12,"Paired"),"Black","Red","Blue","Green"),
+                             name = "Domain")
+g1 <- g1 + labs(y= "# of phenotype hits", x= "Gene")
+g1 <- g1 + theme_bw()
+g1 <- g1 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+g1 <- g1 + theme(axis.line = element_line(color = 'black'))
+g1 <- g1 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+g1 <- g1 + theme(axis.text = element_text(size = axis.text.size))
+g1 <- g1 + coord_flip()
+#g1 
+
+g2 <- ggplot(sig.AT.stat, aes(mutant))
+g2 <- g2 + geom_bar(aes(fill=Category))
+g2 <- g2 + scale_fill_manual(values=brewer.pal(12,"Paired")[c(2,6)],
+                             name = "Category")
+g2 <- g2 + labs(y= "# of phenotype hits", x= "Gene")
+g2 <- g2 + theme_bw()
+g2 <- g2 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+g2 <- g2 + theme(axis.line = element_line(color = 'black'))
+g2 <- g2 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+g2 <- g2 + theme(axis.text = element_text(size = axis.text.size))
+g2 <- g2 + coord_flip()
+#g2 
+
+plot_grid(g1,g2, labels=c('A','B'), label_size=20, align = 'h', ncol=2)
+figure_stackhist <-plot_grid(g1,g2, labels=c('A','B'), label_size=20, align = 'h', ncol=2)
+ggsave(paste0(AT.summary.stat.path, "Figure_stacked_hist.pdf"), figure_stackhist, height = 6, width=10)
+```
+
+## [Gene Pleiotropy] Heatmap: number of significant tests (FDR < 0.05) in each mutantline across different domain (1)
+Here, we show top 50 genes
+```{r mutant_sig_count_domain, fig.width=4, fig.height=9}
+
+mutant.summary<-ddply(all.AT.summary.stat, c("mutant","Domain_Short"), summarise, Num.Sig=sum(na.omit(geno.fdr)<0.05), 
+                      Num.Test=length(na.omit(geno.fdr)), 
+                      Pct.Sig=round(100*sum(na.omit(geno.fdr)<0.05)/length(na.omit(geno.fdr)), 2))
+#mutant.summary <- mutant.summary[order(-mutant.summary$Num.Sig),]
+
+sig.count.mat <- reshape2::dcast(data=mutant.summary[,1:3], 
+                       formula = mutant~Domain_Short, 
+                       fun.aggregate = sum,
+                       value.var = "Num.Sig")
+dim(sig.count.mat)
+head(sig.count.mat)
+num.sig <- rowSums(sig.count.mat[,-1, drop=F])
+#sort by num.sig descending order
+sig.count.mat <- sig.count.mat[order(-num.sig),]
+#get short mutant names (only gene names)
+short.mutant.name <- sub(".*-", "", sig.count.mat$mutant)
+short.mutant.name <- sub("<.*", "", short.mutant.name)
+rownames(sig.count.mat) <- make.names(short.mutant.name, unique=TRUE)
+
+sig.count.mat <- sig.count.mat[,-1]
+
+heatmap.pleio <- pheatmap::pheatmap(mat = sig.count.mat[1:50,], 
+                          color = brewer.pal(9,"YlOrRd"),
+                          cluster_rows=FALSE, 
+                          cluster_cols=FALSE,
+                          cellheight=10,
+                          cellwidth=8)[[4]]
+
+```
+
+
+
+
+## [Gene Pleiotropy] Transposed heatmap (pleiotrophy)
+```{r transposed, fig.width=10, fig.height=4}
+heatmap.pleio.transpose <- pheatmap::pheatmap(mat = t(sig.count.mat[1:50,]), 
+                          color = brewer.pal(9,"YlOrRd"),
+                          cluster_rows=FALSE, 
+                          cluster_cols=FALSE,
+                          cellheight=11,
+                          cellwidth=11)[[4]]
+
+# need to add a histogram of # of sig. tests per mutant line as a row annotation
+# add phenotype category (behavioral vs physiology) as a column annotation
+# use short domain names instead of longer one (e.g., use CBC instead of ClinicalBloodChemistry)
+```
+
+## [Gene Pleiotropy] Heatmap: number of significant tests (FDR < 0.05) in each mutantline across different domain (2)
+Here, we show top 150 genes
+```{r mutant_sig_count_domain_bigger, fig.width=3, fig.height=15}
+pheatmap::pheatmap(mat = sig.count.mat[1:150,], 
+         color = brewer.pal(9,"YlOrRd"),
+         cluster_rows=FALSE, 
+         cluster_cols=FALSE,
+         fontsize = 7)
+```
+
+## [Gene Pleiotropy] Number of Domains significantly associated with a gene (By Domain)
+```{r pleiotropy_by_Domain, fig.width=5, fig.height=3}
+mutant.sig.domain<-ddply(subset(all.AT.summary.stat, geno.fdr<0.05), c("mutant"), summarise,
+                         Num.Sig.Domain=length(unique(domain)))
+
+axis.title.size <- 10
+axis.text.size <- 8
+
+p <-ggplot(mutant.sig.domain, aes(x=Num.Sig.Domain))
+p <- p + geom_histogram(color="black", fill=inferno(10)[6], binwidth = 1)
+p <- p + labs(x= "Degree of gene pleiotropy (by domain)", y= "Counts")
+p <- p + theme_bw()
+p <- p + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p <- p + theme(axis.line = element_line(color = 'black'))
+p <- p + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p <- p + theme(axis.text = element_text(size = axis.text.size))
+p <- p + geom_vline(xintercept=mean(mutant.sig.domain$Num.Sig.Domain), size=1.5)
+p <- p + geom_vline(xintercept=median(mutant.sig.domain$Num.Sig.Domain), linetype="dashed", size=1.5)
+p
+```
+
+
+## [Gene pleiotropy] Combined Figure 1
+```{r pleiotropy_figures, fig.width=8, fig.height=5}
+mutant.sig.summary<-ddply(subset(all.AT.summary.stat, geno.fdr<0.05), c("mutant"), summarise,
+                          Num.Sig=sum(na.omit(geno.fdr)<0.05),
+                          Zsq.Mean=sqrt(mean(geno.tstat^2, na.rm = TRUE)),
+                          Zsq.Sum=sqrt(sum(geno.tstat^2, na.rm = TRUE)),
+                          AbsZ.Mean= mean(abs(geno.tstat), na.rm = TRUE),
+                          AbsZ.Sum= sum(abs(geno.tstat), na.rm = TRUE))
+mutant.sig.summary <- mutant.sig.summary[order(-mutant.sig.summary$Zsq.Mean),]
+
+axis.title.size <- 10
+axis.text.size <- 8
+
+p1 <-ggplot(mutant.sig.summary, aes(x=Num.Sig))
+p1 <- p1 + geom_histogram(color="black", fill=inferno(10)[6], binwidth = 1)
+p1 <- p1 + labs(x= "Degree of pleiotropy", y= "Counts")
+p1 <- p1 + theme_bw()
+p1 <- p1 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p1 <- p1 + theme(axis.line = element_line(color = 'black'))
+p1 <- p1 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p1 <- p1 + theme(axis.text = element_text(size = axis.text.size))
+p1 <- p1 + geom_vline(xintercept=mean(mutant.sig.summary$Num.Sig), size=1.5)
+p1 <- p1 + geom_vline(xintercept=median(mutant.sig.summary$Num.Sig), linetype="dashed", size=1.5)
+
+p2 <- ggplot(mutant.sig.summary, aes(x=Num.Sig, y=Zsq.Sum))
+p2 <- p2 + geom_point()
+p2 <- p2 + labs(x= "Degree of pleiotropy", y= "Square-root of sum of squared Z-scores")
+p2 <- p2 + theme_bw()
+p2 <- p2 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p2 <- p2 + theme(axis.line = element_line(color = 'black'))
+p2 <- p2 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p2 <- p2 + theme(axis.text = element_text(size = axis.text.size))
+
+p3 <- ggplot(mutant.sig.summary, aes(x=Num.Sig, y=Zsq.Mean))
+p3 <- p3 + geom_point()
+p3 <- p3 + labs(x= "Degree of pleiotropy", y= "Square-root of mean of squared Z-scores")
+p3 <- p3 + theme_bw()
+p3 <- p3 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p3 <- p3 + theme(axis.line = element_line(color = 'black'))
+p3 <- p3 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p3 <- p3 + theme(axis.text = element_text(size = axis.text.size))
+
+p4 <- ggplot(mutant.sig.summary, aes(x=Num.Sig, y=AbsZ.Sum))
+p4 <- p4 + geom_point()
+p4 <- p4 + labs(x= "Degree of pleiotropy", y= "Sum of Abs Z-scores")
+p4 <- p4 + theme_bw()
+p4 <- p4 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p4 <- p4 + theme(axis.line = element_line(color = 'black'))
+p4 <- p4 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p4 <- p4 + theme(axis.text = element_text(size = axis.text.size))
+
+p5 <- ggplot(mutant.sig.summary, aes(x=Num.Sig, y=AbsZ.Mean))
+p5 <- p5 + geom_point()
+p5 <- p5 + labs(x= "Degree of pleiotropy", y= "Mean of Abs Z-scores")
+p5 <- p5 + theme_bw()
+p5 <- p5 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p5 <- p5 + theme(axis.line = element_line(color = 'black'))
+p5 <- p5 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p5 <- p5 + theme(axis.text = element_text(size = axis.text.size))
+
+
+plot_grid(p,p1,p2,p3,p4,p5, labels=c('A','B','C','D','E','F'), label_size=20, align = 'h', ncol=3)
+figure2 <- plot_grid(p,p1,p2,p3,p4,p5, labels=c('A','B','C','D','E','F'), label_size=20, align = 'h', ncol=3)
+ggsave(paste0(AT.summary.stat.path, "Figure2_pleiotropy_all.pdf"), figure2, height = 5, width=8)
+```
+
+## [Gene pleiotropy] Combined Figure 2
+```{r pleio_figure, fig.height=7, fig.width=10}
+bottom_row <- plot_grid(p, p1,p3,p5, labels=c('B','C','D','E'), label_size=20, align = 'h', ncol=4)
+plot_grid(heatmap.pleio.transpose, bottom_row, labels=c('A',''), label_size=20, ncol=1, rel_heights = c(1,0.7))
+figure2 <- plot_grid(heatmap.pleio.transpose, bottom_row, labels=c('A',''), label_size=20, ncol=1, rel_heights = c(1,0.7))
+ggsave(paste0(AT.summary.stat.path, "Figure2_pleiotropy.pdf"), figure2, height = 7, width=10)
+```
+
+
+## [Phenotype Polygenicity] Combined figure 1
+```{r polygenicity_figures, fig.width=10, fig.height=5.5}
+pheno.pg.summary<-ddply(subset(all.AT.summary.stat, geno.fdr<0.05), c("Domain_Short","Phenotype_Short"), summarise,
+                          Num.Sig=sum(na.omit(geno.fdr)<0.05),
+                          Zsq.Mean=sqrt(mean(geno.tstat^2, na.rm = TRUE)),
+                          Zsq.Sum=sqrt(sum(geno.tstat^2, na.rm = TRUE)),
+                          AbsZ.Mean= mean(abs(geno.tstat), na.rm = TRUE),
+                          AbsZ.Sum= sum(abs(geno.tstat), na.rm = TRUE))
+pheno.pg.summary <- pheno.pg.summary[order(-pheno.pg.summary$Zsq.Mean),]
+
+axis.title.size <- 10
+axis.text.size <- 8
+
+p1 <-ggplot(pheno.pg.summary, aes(x=Num.Sig))
+p1 <- p1 + geom_histogram(color="black", fill=inferno(10)[6], binwidth = 5)
+p1 <- p1 + labs(x= "Degree of polygenicity", y= "Counts")
+p1 <- p1 + theme_bw()
+p1 <- p1 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p1 <- p1 + theme(axis.line = element_line(color = 'black'))
+p1 <- p1 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p1 <- p1 + theme(axis.text = element_text(size = axis.text.size))
+p1 <- p1 + geom_vline(xintercept=mean(pheno.pg.summary$Num.Sig), size=1.5)
+p1 <- p1 + geom_vline(xintercept=median(pheno.pg.summary$Num.Sig), linetype="dashed", size=1.5)
+
+p2 <- ggplot(pheno.pg.summary, aes(x=Num.Sig, y=Zsq.Sum, color=Domain_Short))
+p2 <- p2 + geom_point()
+p2 <- p2 + scale_color_manual(values=c(brewer.pal(12,"Paired"),"Black","Red","Blue","Green"), name="Domain")
+p2 <- p2 + labs(x= "Degree of polygenicity", y= "Square-root of sum of squared Z-scores")
+p2 <- p2 + theme_bw()
+p2 <- p2 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p2 <- p2 + theme(axis.line = element_line(color = 'black'))
+p2 <- p2 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p2 <- p2 + theme(axis.text = element_text(size = axis.text.size))
+p2 <- p2 + theme(legend.key.size = unit(0.1, 'cm'))
+
+p3 <- ggplot(pheno.pg.summary, aes(x=Num.Sig, y=Zsq.Mean, color=Domain_Short))
+p3 <- p3 + geom_point()
+p3 <- p3 + scale_color_manual(values=c(brewer.pal(12,"Paired"),"Black","Red","Blue","Green"), name="Domain")
+p3 <- p3 + labs(x= "Degree of polygenicity", y= "Square-root of mean of squared Z-scores")
+p3 <- p3 + theme_bw()
+p3 <- p3 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p3 <- p3 + theme(axis.line = element_line(color = 'black'))
+p3 <- p3 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p3 <- p3 + theme(axis.text = element_text(size = axis.text.size))
+p3 <- p3 + theme(legend.key.size = unit(0.1, 'cm'))
+
+p4 <- ggplot(pheno.pg.summary, aes(x=Num.Sig, y=AbsZ.Sum, color=Domain_Short))
+p4 <- p4 + geom_point()
+p4 <- p4 + scale_color_manual(values=c(brewer.pal(12,"Paired"),"Black","Red","Blue","Green"), name="Domain")
+p4 <- p4 + labs(x= "Degree of polygenicity", y= "Sum of Abs Z-scores")
+p4 <- p4 + theme_bw()
+p4 <- p4 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p4 <- p4 + theme(axis.line = element_line(color = 'black'))
+p4 <- p4 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p4 <- p4 + theme(axis.text = element_text(size = axis.text.size))
+p4 <- p4 + theme(legend.key.size = unit(0.1, 'cm'))
+
+p5 <- ggplot(pheno.pg.summary, aes(x=Num.Sig, y=AbsZ.Mean, color=Domain_Short))
+p5 <- p5 + geom_point()
+p5 <- p5 + scale_color_manual(values=c(brewer.pal(12,"Paired"),"Black","Red","Blue","Green"), name="Domain")
+p5 <- p5 + labs(x= "Degree of polygenicity", y= "Mean of Abs Z-scores")
+p5 <- p5 + theme_bw()
+p5 <- p5 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p5 <- p5 + theme(axis.line = element_line(color = 'black'))
+p5 <- p5 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p5 <- p5 + theme(axis.text = element_text(size = axis.text.size))
+p5 <- p5 + theme(legend.key.size = unit(0.1, 'cm'))
+
+plot_grid(p1,p2,p3,p4,p5, labels=c('A','B','C','D','E'), label_size=20, align = 'h', ncol=3)
+figure3 <- plot_grid(p1,p2,p3,p4,p5, labels=c('A','B','C','D','E'), label_size=20, align = 'h', ncol=3)
+ggsave(paste0(AT.summary.stat.path, "Figure3_polygenicity_all.pdf"), figure3, height = 5.5, width=10)
+
+```
+
+
+## [Phenotype Polygenicity] Combined figure 2
+```{r polygenicity_figures2, fig.width=10, fig.height=3}
+pheno.pg.summary<-ddply(subset(all.AT.summary.stat, geno.fdr<0.05), c("Domain_Short","Phenotype_Short"), summarise,
+                          Num.Sig=sum(na.omit(geno.fdr)<0.05),
+                          Zsq.Mean=sqrt(mean(geno.tstat^2, na.rm = TRUE)),
+                          Zsq.Sum=sqrt(sum(geno.tstat^2, na.rm = TRUE)),
+                          AbsZ.Mean= mean(abs(geno.tstat), na.rm = TRUE),
+                          AbsZ.Sum= sum(abs(geno.tstat), na.rm = TRUE))
+pheno.pg.summary <- pheno.pg.summary[order(-pheno.pg.summary$Zsq.Mean),]
+
+axis.title.size <- 10
+axis.text.size <- 8
+
+p1 <-ggplot(pheno.pg.summary, aes(x=Num.Sig))
+p1 <- p1 + geom_histogram(color="black", fill=inferno(10)[6], binwidth = 5)
+p1 <- p1 + labs(x= "Degree of polygenicity", y= "Counts")
+p1 <- p1 + theme_bw()
+p1 <- p1 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p1 <- p1 + theme(axis.line = element_line(color = 'black'))
+p1 <- p1 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p1 <- p1 + theme(axis.text = element_text(size = axis.text.size))
+p1 <- p1 + geom_vline(xintercept=mean(pheno.pg.summary$Num.Sig), size=1.5)
+p1 <- p1 + geom_vline(xintercept=median(pheno.pg.summary$Num.Sig), linetype="dashed", size=1.5)
+
+p3 <- ggplot(pheno.pg.summary, aes(x=Num.Sig, y=Zsq.Mean, color=Domain_Short))
+p3 <- p3 + geom_point()
+p3 <- p3 + scale_color_manual(values=c(brewer.pal(12,"Paired"),"Black","Red","Blue","Green"), name="Domain")
+p3 <- p3 + labs(x= "Degree of polygenicity", y= "Square-root of mean of squared Z-scores")
+p3 <- p3 + theme_bw()
+p3 <- p3 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p3 <- p3 + theme(axis.line = element_line(color = 'black'))
+p3 <- p3 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p3 <- p3 + theme(axis.text = element_text(size = axis.text.size))
+p3 <- p3 + theme(legend.key.size = unit(0.1, 'cm'))
+
+p5 <- ggplot(pheno.pg.summary, aes(x=Num.Sig, y=AbsZ.Mean, color=Domain_Short))
+p5 <- p5 + geom_point()
+p5 <- p5 + scale_color_manual(values=c(brewer.pal(12,"Paired"),"Black","Red","Blue","Green") , name="Domain")
+p5 <- p5 + labs(x= "Degree of polygenicity", y= "Mean of Abs Z-scores")
+p5 <- p5 + theme_bw()
+p5 <- p5 + theme(plot.background = element_blank() ,
+               panel.border = element_blank(),
+               panel.background = element_blank())
+p5 <- p5 + theme(axis.line = element_line(color = 'black'))
+p5 <- p5 + theme(axis.title = element_text(size = axis.title.size, vjust= 0))
+p5 <- p5 + theme(axis.text = element_text(size = axis.text.size))
+p5 <- p5 + theme(legend.key.size = unit(0.1, 'cm'))
+
+plot_grid(p1,p3,p5, labels=c('A','B','C'), label_size=20, align = 'h', ncol=3)
+figure4 <- plot_grid(p1,p3,p5, labels=c('A','B','C'), label_size=20, align = 'h', ncol=3)
+ggsave(paste0(AT.summary.stat.path,"Figure4_polygenicity_all.pdf"), figure4, height = 3, width=10)
+
+```
+
+## genetic correlation (loss-of-function) between phenotypes inferred from association Z-scores
+```{r genetic_corr_zscore, fig.width=10, fig.height=9.5}
+
+geno.tstat.mat <- all.AT.summary.stat[,c("Figure_Label","mutant","geno.tstat")]
+
+geno.tstat.mat <- reshape2::dcast(data=geno.tstat.mat, 
+                       formula = mutant ~ Figure_Label, 
+                       fun.aggregate = sum,
+                       value.var = "geno.tstat")
+dim(geno.tstat.mat)
+head(geno.tstat.mat[,1:4])
+geno.tstat.mat <- geno.tstat.mat[,-1]
+geno.corr.mat <- cor(geno.tstat.mat, use="complete.obs")
+#pheno.corr.mat <- cor(geno.tstat.mat, use="complete.obs", method = "spearman")
+corr.pheno<-pheatmap::pheatmap(mat = geno.corr.mat,
+         clustering_method = "ward.D2",
+         cutree_cols = 10,
+         cutree_rows = 10,
+         color=colorRampPalette(c("blue","white","red"))(50),
+         fontsize = 5)[[4]]
+
+pheatmap::pheatmap(mat = geno.corr.mat,
+         clustering_method = "ward.D2",
+         cutree_cols = 10,
+         cutree_rows = 10,
+         color=colorRampPalette(c("blue","white","red"))(50),
+         fontsize = 5,
+         filename = paste0(AT.summary.stat.path, "Figure_geno_corr.pdf"),
+         width = 10, height = 9.5)
+```
+
+## phenotypic correlation between mutant lines inferred from association Z-scores
+```{r pheno_corr_zscore, fig.width=10, fig.height=9.5, eval=FALSE}
+
+geno.tstat.mat <- all.AT.summary.stat[,c("Figure_Label","mutant","geno.tstat")]
+
+geno.tstat.mat <- reshape2::dcast(data=geno.tstat.mat, 
+                       formula = mutant ~ Figure_Label, 
+                       fun.aggregate = sum,
+                       value.var = "geno.tstat")
+dim(geno.tstat.mat)
+head(geno.tstat.mat[,1:4])
+geno.tstat.mat <- geno.tstat.mat[,-1]
+pheno.corr.mat <- cor(t(geno.tstat.mat), use="complete.obs")
+#pheno.corr.mat <- cor(geno.tstat.mat, use="complete.obs", method = "spearman")
+corr.mutant <- pheatmap::pheatmap(mat = pheno.corr.mat,
+                        #clustering_method = "ward.D2",
+                        cutree_cols = 10,
+                        cutree_rows = 10,
+                        color=colorRampPalette(c("blue","white","red"))(50),
+                        fontsize = 5)[[4]]
+pheatmap::pheatmap(mat = pheno.corr.mat,
+         clustering_method = "ward.D2",
+         cutree_cols = 10,
+         cutree_rows = 10,
+         color=colorRampPalette(c("blue","white","red"))(50),
+         fontsize = 5,
+         filename = paste0(AT.summary.stat.path, "Figure_pheno_corr.pdf"),
+         width = 10, height = 9.5)
+```
+
+## Effect Size vs -log10(FDR)
+```{r effect_size_FDR, message=FALSE, eval=TRUE,  fig.height=6, fig.width=8}
+sig.AT.summary.stat <- subset(all.AT.summary.stat, geno.fdr<0.1)
+pheno.geno <- paste0("[",sig.AT.summary.stat$pheno, "] [", sig.AT.summary.stat$mutant,"]")
+p <- ggplot(sig.AT.summary.stat, aes(x=geno.std.beta, y=-log10(geno.fdr), text = pheno.geno)) 
+p <- p + geom_point(size=2, aes(colour = domain))
+p <- p + labs(x= "Std. Beta", y= "-log10(Association Testing FDR)")
+p <- p + theme_bw()
+p <- p + theme(plot.background = element_blank() ,
+                              panel.border = element_blank(),
+                              panel.background = element_blank())
+p <- p + theme(axis.line = element_line(color = 'black'))
+p <- p + geom_hline(yintercept = -log10(0.05), color="blue")
+p <- p + geom_hline(yintercept = -log10(10^-5), color="red")
+p <- p + geom_hline(yintercept = -log10(10^-10), color="red")
+p <- p + theme(axis.title.x = element_text(size = 15, vjust= 0))
+p <- p + theme(axis.title.y = element_text(size = 15, vjust= 0))
+p <- p + theme(strip.text.x = element_text(size = 8))
+ggplotly()
+```
+
+
+## Z-score non-centrality
+```{r zscore_noncentrality, message=FALSE, eval=TRUE,  fig.height=6, fig.width=8}
+
+zscore.mean.df <- ddply(all.AT.summary.stat, c("domain","pheno"), summarise,
+                        mean=mean(geno.tstat, na.rm=TRUE),
+                        sd=sd(geno.tstat, na.rm=TRUE), 
+                        n= sum(!is.na(geno.tstat)), 
+                        num.sig.genes = sum(geno.fdr<0.05, na.rm=TRUE))
+
+zscore.mean.df <- zscore.mean.df[order(zscore.mean.df$mean),]
+head(zscore.mean.df)
+
+domain.pheno <- paste0("[",zscore.mean.df$domain, "] [", zscore.mean.df$pheno,"]")
+
+p <- ggplot(zscore.mean.df, aes(x=mean, y=100*zscore.mean.df$num.sig.genes/zscore.mean.df$n, text = domain.pheno)) 
+p <- p + geom_point(size=2, aes(colour = domain))
+p <- p + geom_smooth(method = "loess", size=1, aes(group=1))
+p <- p + labs(y= "Prop. Sig Genes", x= "Z-score Mean Per Phenotype")
+p <- p + theme_bw()
+p <- p + theme(plot.background = element_blank() ,
+                              panel.border = element_blank(),
+                              panel.background = element_blank())
+p <- p + theme(axis.line = element_line(color = 'black'))
+p <- p + theme(axis.title.x = element_text(size = 15, vjust= 0))
+p <- p + theme(axis.title.y = element_text(size = 15, vjust= 0))
+p <- p + theme(strip.text.x = element_text(size = 8))
+ggplotly()
+```
+
+
+<!--## Barplot of phenotype hits per gene across domains-->
+```{r barplot_pheno_hits, fig.width=10, fig.height=20, eval=FALSE, echo=FALSE}
+
+pheno.domain.list <- colnames(sig.count.mat)
+
+p.list <- NULL
+for(pd in pheno.domain.list){
+  #pd <- pheno.domain.list[2]
+  t <- NULL
+  t$Gene <- rownames(sig.count.mat)
+  t$Num.Sig <- sig.count.mat[,pd]
+  t <- as.data.frame(t)
+  t <- t[order(-t$Num.Sig),]
+  t$Gene <- factor(t$Gene, levels=t$Gene)
+
+  p <- ggplot(data = t[1:30,], aes(x=Gene, y=Num.Sig))
+  p <- p + geom_bar(stat="identity", fill=inferno(10)[6])
+  p <- p + labs(title = pd)
+  p <- p + scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.1))))) ## to generate integer ticks only  
+  p <- p + labs(y= "# of Sig. Tests", x= "Gene")
+  p <- p + theme_bw()
+  p <- p + theme(plot.background = element_blank() ,
+                                panel.border = element_blank(),
+                                panel.background = element_blank())
+  p <- p + theme(axis.line = element_line(color = 'black'))
+  p <- p + theme(axis.title.x = element_text(size = 10, vjust=-0.5))
+  p <- p + theme(axis.title.y = element_text(size = 10, vjust= 1.0))
+  p <- p + theme(strip.text = element_text(size = 5))
+  p <- p + coord_flip()
+  p.list[[pd]] <- p
+}
+do.call("grid.arrange", c(p.list, ncol=4))
+```
+
+<!--## genetic correlation (loss-of-function) between phenotypes inferred from association Z-scores (2)
+Here, we plot absolute value of corr mat of the Z-scores.-->
+```{r geno_abs_corr_zscore, fig.width=10, fig.height=9.5, eval=FALSE, echo=FALSE}
+pheatmap::pheatmap(mat = abs(geno.corr.mat),
+         clustering_method = "ward.D2",
+         cutree_cols = 10,
+         cutree_rows = 10,
+         color = colorRampPalette(c("white","red"))(50),
+         fontsize = 5)
+
+```
+
+<!--## phenotypic correlation inferred from association Z-scores (2)
+Here, we plot absolute value of corr mat of the Z-scores.-->
+```{r pheno_abs_corr_zscore, fig.width=10, fig.height=9.5, eval=FALSE, echo=FALSE}
+pheatmap::pheatmap(mat = abs(pheno.corr.mat),
+         clustering_method = "ward.D2",
+         cutree_cols = 10,
+         cutree_rows = 10,
+         color=colorRampPalette(c("white","red"))(50),
+         fontsize = 5)
+
+```
+
+<!--## phenotype clustering using tSNE-->
+```{r pheno_tSNE, fig.width=10, fig.height=9.5, eval=FALSE, include=FALSE}
+set.seed(32354388)
+#tsne.res <- Rtsne(t(geno.tstat.mat), dims = 2)
+tsne.res <- Rtsne(pheno.corr.mat, dims = 2)
+plot(tsne.res$Y, main="tSNE", xlab="Dim1", ylab="Dim2", pch=21, 
+     col="black", bg="red", oma=c(4,4,6,12))
+#     col=color.vec[Cell_Type], bg=color.vec[Cell_Type], oma=c(4,4,6,12))
+#legend("bottomright", levels(Cell_Type), border="white",fill=color.vec, bty="n")
+```
+
+<!--## Combined figure: genetic and phenotypic correlaiton-->
+```{r corr_combined, fig.width=8, fig.height=16, eval=FALSE, echo=FALSE}
+plot_grid(corr.pheno, corr.mutant, labels=c('A','B'), label_size=20, align = 'v', ncol=1)
+figure_corr <- plot_grid(corr.pheno, corr.mutant, labels=c('A','B'), label_size=20, align = 'h', ncol=2)#, rel_widths = c(1.3, 1))
+ggsave(paste0(AT.summary.stat.path, "Figure_corr.pdf"), figure_corr, height = 10, width=20)
+```
