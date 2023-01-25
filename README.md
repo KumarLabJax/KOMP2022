@@ -7,9 +7,12 @@ A [workflowr][] project.
 
 The project folder is in the sumner /projects/compsci/vmp/USERS/heh/KOMP2022/.
 
-raw data from LIMCS for example: data/2022-05-13-1.zip and data/2022-05-13-2.zip
+raw data from LIMCS for example: data/2022-05-13-0.z01 and data/2022-05-13-0.zip
+I split the raw data into two zip files (2022-05-13-0.z01 and 2022-05-13-0.zip) less than 100mb using command:
+zip 2022-05-13.zip --out 2022-05-13-0 -s 90m
+
 use this command to unzip
-cat 2022-05-13-*.zip > 2022-05-13.zip; unzip  2022-05-13.zip
+zip -F 2022-05-13-0.zip --out 2022-05-13.zip; unzip 2022-05-13.zip
 
 Note: use the date name in the following Rscript for differentiating batches. for example here: batch = "2022-05-13"
 
